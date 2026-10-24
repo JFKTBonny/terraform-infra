@@ -1,0 +1,22 @@
+#cloud-config
+# Rendered by templatefile(): ${app_name} etc. are Terraform values.
+package_update: true
+packages:
+%{ for p in packages ~}
+  - ${p}
+%{ endfor ~}
+
+write_files:
+  - path: /etc/app/info
+    content: |
+      app=${app_name}
+      environment=${environment}
+  - path: /var/www/html/index.html
+    content: |
+      <h1>${app_name} (${environment})</h1>
+      <p>Placeholder from user data. The provisioner replaces this page.</p>
+
+runcmd:
+  - systemctl enable --now nginx
+  # $${HOSTNAME} is escaped, so the shell (not Terraform) expands it
+  - echo "Booted on $${HOSTNAME}" >> /var/log/app-boot.log

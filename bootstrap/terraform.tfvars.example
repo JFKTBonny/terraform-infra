@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars and edit:
+#   cp terraform.tfvars.example terraform.tfvars
+
+aws_region        = "eu-south-1"
+state_bucket_name = "mycompany-terraform-state-12345"
+github_owner      = "your-github-user"
+github_repo       = "terraform-infra"
+
+# Set to false if the GitHub OIDC provider already exists in this account
+create_github_oidc_provider = true

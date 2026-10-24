@@ -1,0 +1,174 @@
+name: Terraform
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "environments/**"
+      - "modules/**"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "environments/**"
+      - "modules/**"
+      - ".github/workflows/terraform.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # required for AWS OIDC
+
+env:
+  TF_VERSION: "1.17.0"
+  AWS_REGION: "eu-south-1"
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Static checks (no AWS access needed)
+  # -------------------------------------------------------------------------
+  checks:
+    name: Format & lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Format check
+        run: terraform fmt -check -recursive
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v6
+
+      - name: TFLint
+        run: |
+          tflint --init --config "$GITHUB_WORKSPACE/.tflint.hcl"
+          tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  # -------------------------------------------------------------------------
+  # Plan every environment (runs on PRs and on main)
+  # -------------------------------------------------------------------------
+  plan:
+    name: Plan (${{ matrix.environment }})
+    needs: checks
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [dev, prod]
+    defaults:
+      run:
+        working-directory: environments/${{ matrix.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Init
+        run: terraform init -input=false
+
+      - name: Validate
+        run: terraform validate
+
+      - name: Plan
+        run: terraform plan -input=false -no-color -out=tfplan
+
+      - name: Plan summary
+        run: |
+          {
+            echo "## Plan: ${{ matrix.environment }}"
+            echo '```'
+            terraform show -no-color tfplan | tail -n 100
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # -------------------------------------------------------------------------
+  # Apply dev on merge to main
+  # -------------------------------------------------------------------------
+  apply-dev:
+    name: Apply (dev)
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: dev
+    concurrency: terraform-dev
+    defaults:
+      run:
+        working-directory: environments/dev
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Init
+        run: terraform init -input=false
+
+      - name: Plan
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Apply
+        run: terraform apply -input=false tfplan
+
+  # -------------------------------------------------------------------------
+  # Apply prod after dev succeeds (add Required reviewers on the prod environment)
+  # -------------------------------------------------------------------------
+  apply-prod:
+    name: Apply (prod)
+    needs: apply-dev
+    runs-on: ubuntu-latest
+    environment: prod
+    concurrency: terraform-prod
+    defaults:
+      run:
+        working-directory: environments/prod
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Init
+        run: terraform init -input=false
+
+      - name: Plan
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Apply
+        run: terraform apply -input=false tfplan

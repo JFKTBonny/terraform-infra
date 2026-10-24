@@ -1,0 +1,15 @@
+# OPTIONAL — after the first apply, move bootstrap state into the bucket it created:
+#   1. cp backend.tf.example backend.tf
+#   2. Replace the bucket name
+#   3. terraform init -migrate-state
+#   4. Delete the local terraform.tfstate files
+
+terraform {
+  backend "s3" {
+    bucket       = "mycompany-terraform-state-12345"
+    key          = "bootstrap/terraform.tfstate"
+    region       = "eu-south-1"
+    encrypt      = true
+    use_lockfile = true
+  }
+}
